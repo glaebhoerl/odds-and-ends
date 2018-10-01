@@ -6,48 +6,64 @@
 
 struct Widget: QWidget
 {
-    QImage m_image;
     int    m_pointSize;
+    int    m_pixelSize;
+    QImage m_image;
 
-    Widget(): m_pointSize(10)
+    Widget(): m_pointSize(10), m_pixelSize(600), m_image(QApplication::desktop()->size(), QImage::Format_Mono)
     {
         setMouseTracking(true);
+        refresh();
     }
 
-    void resizeEvent(QResizeEvent*) override
+    void mousePressEvent(QMouseEvent* event) override
     {
-        m_image = QImage(width(), height(), QImage::Format_Mono);
-        refresh();
+        setMouseTracking(!hasMouseTracking());
+        mouseMoveEvent(event);
     }
 
     void mouseMoveEvent(QMouseEvent* event) override
     {
-        m_pointSize = qAbs(event->x() - width() / 2) + qAbs(event->y() - height() / 2);
+        m_pointSize = event->y();
+        m_pixelSize = event->x();
         refresh();
     }
 
     void refresh()
     {
-        setWindowTitle(QString("%1_%2x%3").arg(m_pointSize).arg(width()).arg(height()));
+        setWindowTitle(QString("%1pt%2px").arg(m_pointSize).arg(m_pixelSize));
+
         m_image.fill(0);
-        const double pixelSize = qMax(width(), height());
-        const double scale = m_pointSize / pixelSize;
-        for (int i = 0; i < width(); i++) {
-            for (int j = 0; j < height(); j++) {
-                const double x = (i * 2 - width())  * scale;
-                const double y = (j * 2 - height()) * scale;
+        const double scale = double(m_pointSize) / double(m_pixelSize);
+
+        for (int i = 0; i < m_image.width(); i++) {
+            for (int j = 0; j < m_image.height(); j++) {
+                const double x = (i * 2 - m_image.width())  * scale;
+                const double y = (j * 2 - m_image.height()) * scale;
                 const double result = x*x + y*y;
                 if (float(result) < result) {
                     m_image.setPixel(i, j, 1);
                 }
             }
         }
+
+        update();
+    }
+
+    void moveEvent(QMoveEvent*) override
+    {
+        update();
+    }
+
+    void resizeEvent(QResizeEvent*) override
+    {
         update();
     }
 
     void paintEvent(QPaintEvent*) override
     {
-        QPainter(this).drawImage(rect(), m_image);
+        const QRect subRect = QRect(mapToGlobal(QPoint(0, 0)), mapToGlobal(QPoint(width() - 1, height() - 1)));
+        QPainter(this).drawImage(rect(), m_image, subRect);
     }
 
     void keyPressEvent(QKeyEvent* event) override
@@ -71,7 +87,7 @@ int main (int argc, char** argv)
 {
     QApplication app(argc, argv);
     Widget label;
-    label.resize(500, 500);
+    label.resize(600, 600);
     label.move((app.desktop()->width() - label.width()) / 2, (app.desktop()->height() - label.height()) / 2);
     label.show();
     return app.exec();
