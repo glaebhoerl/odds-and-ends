@@ -24,8 +24,8 @@ struct Widget: QWidget
 
     void mouseMoveEvent(QMouseEvent* event) override
     {
-        m_pointSize = event->y();
-        m_pixelSize = event->x();
+        m_pointSize = event->y() + 1;
+        m_pixelSize = event->x() + 1;
         refresh();
     }
 
