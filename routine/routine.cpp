@@ -16,6 +16,12 @@ struct App: QApplication
         QMessageBox::critical(nullptr, "Error", error, QMessageBox::Close);
     }
 
+    static void reportFatalError(QString error)
+    {
+        reportError(error);
+        ::exit(1);
+    }
+
     QBasicTimer m_timer;
     QDateTime   m_lastKnownDateTime;
     QString     m_inputFileName;
@@ -23,8 +29,7 @@ struct App: QApplication
     App(int& argc, char** argv): QApplication(argc, argv)
     {
         if (arguments().count() != 2) {
-            reportError("Expected 1 argument (the input file)!");
-            ::exit(1);
+            reportFatalError("Expected 1 argument (the input file)!");
         }
         m_inputFileName = arguments().last();
         m_lastKnownDateTime = QDateTime::currentDateTime();
@@ -61,7 +66,15 @@ struct App: QApplication
         performActions(parseActions(inputFile.readAll()), startTime, endTime);
     }
 
-    typedef QMultiMap<QTime, QString> Actions;
+    struct Action
+    {
+        enum Type { Command, Text };
+        Type    type;
+        QString content;
+        Action(Type type, QString content): type(type), content(content) { }
+    };
+
+    typedef QMultiMap<QTime, Action> Actions;
 
     static Actions parseActions(QByteArray input)
     {
@@ -76,8 +89,8 @@ struct App: QApplication
                 reportError("Invalid line in input: " + line);
                 return Actions();
             }
-            const QByteArray timeString   = line.left(5),
-                             actionString = line.mid(6);
+            QByteArray timeString   = line.left(5),
+                       actionString = line.mid(6);
 
             const QTime time = QTime::fromString(timeString, "HH:mm");
             if (!time.isValid()) {
@@ -85,12 +98,21 @@ struct App: QApplication
                 return Actions();
             }
 
-            if (actionString.startsWith('`') != actionString.endsWith('`')) {
+            Action::Type type;
+
+            if (actionString.startsWith('"') && actionString.endsWith('"')) {
+                type = Action::Text;
+            } else if (actionString.startsWith('`') && actionString.endsWith('`')) {
+                type = Action::Command;
+            } else {
                 reportError("Invalid action in input line: " + line);
                 return Actions();
             }
 
-            actions.insert(time, actionString);
+            actionString = actionString.mid(1);
+            actionString.chop(1);
+
+            actions.insert(time, Action(type, actionString));
         }
         return actions;
     }
@@ -99,7 +121,7 @@ struct App: QApplication
     {
         foreach (QTime time, actions.uniqueKeys()) {
             if (isBetween(time, startTime, endTime)) {
-                foreach (QString action, actions.values(time)) {
+                foreach (Action action, actions.values(time)) {
                     performAction(time, action);
                 }
             }
@@ -115,24 +137,28 @@ struct App: QApplication
         }
     }
 
-    static void performAction(QTime time, QString action)
+    static void performAction(QTime time, Action action)
     {
-        if (action.startsWith('`')) {
-            action = action.mid(1);
-            action.chop(1);
-            if (QProcess::execute("sh", QStringList() << "-c" << action) != 0) {
-                reportError("Command `" + action + "` failed!");
+        switch (action.type) {
+            case Action::Command: {
+                if (QProcess::execute("sh", QStringList() << "-c" << action.content) != 0) {
+                    reportError("Command `" + action.content + "` failed!");
+                }
+                return;
             }
-            return;
-        }
 
-        QMessageBox* messageBox = new QMessageBox;
-        messageBox->setAttribute(Qt::WA_DeleteOnClose);
-        messageBox->setWindowTitle(time.toString("HH:mm"));
-        messageBox->setText(action);
-        messageBox->addButton(QMessageBox::Ok);
-        messageBox->setStyleSheet("QLabel { font-size: 20pt; padding-top: 50px; padding-bottom: 50px; padding-left: 75px; padding-right: 75px; }");
-        messageBox->open();
+            case Action::Text: {
+                QMessageBox* messageBox = new QMessageBox;
+                messageBox->setAttribute(Qt::WA_DeleteOnClose);
+                messageBox->setWindowTitle(time.toString("HH:mm"));
+                messageBox->setText(action.content);
+                messageBox->addButton(QMessageBox::Ok);
+                messageBox->setStyleSheet("QLabel { font-size: 20pt; padding-top: 50px; padding-bottom: 50px; padding-left: 75px; padding-right: 75px; }");
+                messageBox->open();
+                return;
+            }
+        }
+        reportFatalError("Unknown action type!");
     }
 };
 
