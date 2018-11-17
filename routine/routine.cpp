@@ -131,6 +131,7 @@ struct App: QApplication
         messageBox->setWindowTitle(time.toString("HH:mm"));
         messageBox->setText(action);
         messageBox->addButton(QMessageBox::Ok);
+        messageBox->setStyleSheet("QLabel { font-size: 20pt; padding-top: 50px; padding-bottom: 50px; padding-left: 75px; padding-right: 75px; }");
         messageBox->open();
     }
 };
