@@ -1,8 +1,12 @@
+#include <unistd.h>
+
 #include <QApplication>
 #include <QBasicTimer>
 #include <QByteArray>
 #include <QDateTime>
+#include <QDebug>
 #include <QFile>
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QMultiMap>
 #include <QProcess>
@@ -43,15 +47,29 @@ struct App: QApplication
             return;
         }
         event->accept();
+
         QDateTime previousDateTime = m_lastKnownDateTime,
                   currentDateTime  = QDateTime::currentDateTime();
         m_lastKnownDateTime = currentDateTime;
+
         if (previousDateTime.secsTo(currentDateTime) >= 60 || previousDateTime.time().minute() != currentDateTime.time().minute()) {
             if (previousDateTime.secsTo(currentDateTime) > 60 * 60) {
                 // Don't process actions more than an hour old
                 previousDateTime = currentDateTime.addSecs(-60 * 60);
             }
             processActions(m_inputFileName, previousDateTime.time(), currentDateTime.time());
+        }
+
+        hotReloadCheck(previousDateTime, m_inputFileName);
+    }
+
+    static void hotReloadCheck(QDateTime previousDateTime, QString inputFileName)
+    {
+        const QFileInfo selfInfo(arguments().first());
+        if (selfInfo.exists() && selfInfo.isExecutable() && selfInfo.lastModified() >= previousDateTime) {
+            QByteArray selfName = arguments().first().toUtf8();
+            execv(selfName.data(), (QVector<char*>() << selfName.data() << inputFileName.toUtf8().data() << nullptr).constData());
+            reportError("Failed to hot reload: " + QString(strerror(errno)));
         }
     }
 
