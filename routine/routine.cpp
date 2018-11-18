@@ -219,14 +219,19 @@ struct App: QApplication
                         Q_ASSERT(action.type == Action::Text);
                         setAttribute(Qt::WA_DeleteOnClose);
                         setWindowFlag(Qt::WindowStaysOnTopHint);
-                        setStyleSheet("QLabel { font-size: 20pt; padding-top: 50px; padding-bottom: 50px; padding-left: 75px; padding-right: 75px; }");
+                        setStyleSheet("QLabel { font-size: 20pt; min-width: 300px; min-height: 200px; }");
                         setWindowTitle(action.time.toString("HH:mm"));
-                        setText(action.content);
+                        setText("<p align=\"center\">" + action.content + "</p>"); // TODO escape...
 
                         foreach (uint remindMinute, remindMinutes) {
-                            remindButtons.insert(addButton(QString("Gimme %1").arg(remindMinute), QMessageBox::NoRole), remindMinute);
+                            remindButtons.insert(addButton(QString("Gimme %1").arg(remindMinute), QMessageBox::ActionRole), remindMinute);
                         }
-                        addButton("Done!", QMessageBox::YesRole);
+                        setDefaultButton(addButton("Done!", QMessageBox::ActionRole));
+
+                        foreach (QAbstractButton* button, buttons()) {
+                            button->installEventFilter(this);
+                        }
+                        this->installEventFilter(this);
                     }
 
                     ~MessageBox()
@@ -234,6 +239,15 @@ struct App: QApplication
                         foreach (uint remindMinute, remindButtons.values(clickedButton())) {
                             registerReminder(Reminder(action, QDateTime::currentDateTime().addSecs(60 * remindMinute).time()));
                         }
+                    }
+
+                    bool eventFilter(QObject*, QEvent* event) override
+                    {
+                        // To avoid accidentally activating one of the buttons by keypress if it pops in the middle of typing something
+                        if (event->type() == QEvent::KeyPress) {
+                            return true;
+                        }
+                        return false;
                     }
                 };
 
