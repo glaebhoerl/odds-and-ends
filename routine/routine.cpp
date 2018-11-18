@@ -243,7 +243,7 @@ struct App: QApplication
 
                     bool eventFilter(QObject*, QEvent* event) override
                     {
-                        // To avoid accidentally activating one of the buttons by keypress if it pops in the middle of typing something
+                        // To avoid accidentally activating one of the buttons by keypress if it pops up in the middle of typing something
                         if (event->type() == QEvent::KeyPress) {
                             return true;
                         }
