@@ -8,10 +8,11 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMessageBox>
-#include <QMultiMap>
 #include <QProcess>
+#include <QPushButton>
 #include <QString>
 #include <QTimerEvent>
+#include <QVector>
 
 struct App: QApplication
 {
@@ -26,9 +27,39 @@ struct App: QApplication
         ::exit(1);
     }
 
+    struct Action
+    {
+        enum Type { Command, Text };
+        Type    type;
+        QString content;
+        QTime   time;
+        Action(Type type, QString content, QTime time): type(type), content(content), time(time) { }
+    };
+
+    struct Reminder
+    {
+        Action action;
+        QTime  newTime;
+        Reminder(Action action, QTime newTime): action(action), newTime(newTime) { }
+    };
+
+    struct RegisterReminder
+    {
+        virtual void operator ()(Reminder) = 0;
+    };
+
+    struct Reminders: QList<Reminder>, RegisterReminder
+    {
+        void operator ()(Reminder reminder) override
+        {
+            append(reminder);
+        }
+    };
+
     QBasicTimer m_timer;
     QDateTime   m_lastKnownDateTime;
     QString     m_inputFileName;
+    Reminders   m_reminders;
 
     App(int& argc, char** argv): QApplication(argc, argv)
     {
@@ -57,7 +88,7 @@ struct App: QApplication
                 // Don't process actions more than an hour old
                 previousDateTime = currentDateTime.addSecs(-60 * 60);
             }
-            processActions(m_inputFileName, previousDateTime.time(), currentDateTime.time());
+            processActions(m_inputFileName, previousDateTime.time(), currentDateTime.time(), m_reminders);
         }
 
         hotReloadCheck(previousDateTime, m_inputFileName);
@@ -73,7 +104,7 @@ struct App: QApplication
         }
     }
 
-    static void processActions(QString inputFileName, QTime startTime, QTime endTime)
+    static void processActions(QString inputFileName, QTime startTime, QTime endTime, Reminders& reminders)
     {
         QFile inputFile(inputFileName);
         if (!inputFile.open(QFile::ReadOnly)) {
@@ -81,18 +112,14 @@ struct App: QApplication
             return;
         }
 
-        performActions(parseActions(inputFile.readAll()), startTime, endTime);
+        performActions(parseActions(inputFile.readAll()), startTime, endTime, reminders);
     }
 
-    struct Action
+    struct Actions
     {
-        enum Type { Command, Text };
-        Type    type;
-        QString content;
-        Action(Type type, QString content): type(type), content(content) { }
+        QList<Action> actions;
+        QList<uint>   remindMinutes;
     };
-
-    typedef QMultiMap<QTime, Action> Actions;
 
     static Actions parseActions(QByteArray input)
     {
@@ -100,6 +127,17 @@ struct App: QApplication
         foreach (QByteArray line, input.split('\n')) {
             line = line.simplified();
             if (line.isEmpty() || line.startsWith('#')) {
+                continue;
+            }
+
+            if (line.startsWith("remind ")) {
+                foreach (QString remindString, line.split(' ').mid(1)) {
+                    actions.remindMinutes.append(remindString.toUInt());
+                    if (actions.remindMinutes.last() == 0) {
+                        reportError("Invalid remind value in line: " + line);
+                        return Actions();
+                    }
+                }
                 continue;
             }
 
@@ -130,18 +168,22 @@ struct App: QApplication
             actionString = actionString.mid(1);
             actionString.chop(1);
 
-            actions.insert(time, Action(type, actionString));
+            actions.actions.append(Action(type, actionString, time));
         }
         return actions;
     }
 
-    static void performActions(Actions actions, QTime startTime, QTime endTime)
+    static void performActions(Actions actions, QTime startTime, QTime endTime, Reminders& reminders)
     {
-        foreach (QTime time, actions.uniqueKeys()) {
-            if (isBetween(time, startTime, endTime)) {
-                foreach (Action action, actions.values(time)) {
-                    performAction(time, action);
-                }
+        for (int i = reminders.count() - 1; i >= 0; i--) {
+            if (isBetween(reminders.at(i).newTime, startTime, endTime)) {
+                performAction(reminders.takeAt(i).action, actions.remindMinutes, reminders);
+            }
+        }
+
+        foreach (Action action, actions.actions) {
+            if (isBetween(action.time, startTime, endTime)) {
+                performAction(action, actions.remindMinutes, reminders);
             }
         }
     }
@@ -155,7 +197,7 @@ struct App: QApplication
         }
     }
 
-    static void performAction(QTime time, Action action)
+    static void performAction(Action action, QList<uint> remindMinutes, RegisterReminder& registerReminder)
     {
         switch (action.type) {
             case Action::Command: {
@@ -166,13 +208,36 @@ struct App: QApplication
             }
 
             case Action::Text: {
-                QMessageBox* messageBox = new QMessageBox;
-                messageBox->setAttribute(Qt::WA_DeleteOnClose);
-                messageBox->setWindowTitle(time.toString("HH:mm"));
-                messageBox->setText(action.content);
-                messageBox->addButton(QMessageBox::Ok);
-                messageBox->setStyleSheet("QLabel { font-size: 20pt; padding-top: 50px; padding-bottom: 50px; padding-left: 75px; padding-right: 75px; }");
-                messageBox->open();
+                struct MessageBox: QMessageBox
+                {
+                    Action                       action;
+                    QMap<QAbstractButton*, uint> remindButtons;
+                    RegisterReminder&            registerReminder;
+
+                    MessageBox(Action action, QList<uint> remindMinutes, RegisterReminder& registerReminder): action(action), registerReminder(registerReminder)
+                    {
+                        Q_ASSERT(action.type == Action::Text);
+                        setAttribute(Qt::WA_DeleteOnClose);
+                        setWindowFlag(Qt::WindowStaysOnTopHint);
+                        setStyleSheet("QLabel { font-size: 20pt; padding-top: 50px; padding-bottom: 50px; padding-left: 75px; padding-right: 75px; }");
+                        setWindowTitle(action.time.toString("HH:mm"));
+                        setText(action.content);
+
+                        foreach (uint remindMinute, remindMinutes) {
+                            remindButtons.insert(addButton(QString("Gimme %1").arg(remindMinute), QMessageBox::NoRole), remindMinute);
+                        }
+                        addButton("Done!", QMessageBox::YesRole);
+                    }
+
+                    ~MessageBox()
+                    {
+                        foreach (uint remindMinute, remindButtons.values(clickedButton())) {
+                            registerReminder(Reminder(action, QDateTime::currentDateTime().addSecs(60 * remindMinute).time()));
+                        }
+                    }
+                };
+
+                (new MessageBox(action, remindMinutes, registerReminder))->open();
                 return;
             }
         }
